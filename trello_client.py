@@ -208,9 +208,13 @@ class TrelloWorkManager:
         """
         Get all ready work items from Backlog.
         
-        Returns cards with 🟢 Ready label.
+        Returns cards with 🟢 Ready label that are in Backlog list.
         """
-        return self.client.find_cards_with_label(self.board_id, self.LABEL_READY)
+        backlog = self.client.find_list_by_name(self.board_id, self.BACKLOG)
+        if not backlog:
+            return []
+        
+        return [card for card in backlog.cards if card.has_label(self.LABEL_READY)]
         
     def get_blocked_work(self) -> List[TrelloCard]:
         """
