@@ -254,24 +254,42 @@ class TrelloWorkManager:
         """Add a progress comment to a card."""
         return self.client.add_comment(card.id, message)
         
+    def get_any_backlog_work(self) -> List[TrelloCard]:
+        """
+        Get ANY work items from Backlog (no label required).
+        
+        Returns all cards in Backlog list.
+        """
+        backlog = self.client.find_list_by_name(self.board_id, self.BACKLOG)
+        if not backlog:
+            return []
+        
+        return backlog.cards
+        
     def find_next_work(self) -> Optional[TrelloCard]:
         """
         Find the next work item to work on.
         
         Priority:
         1. Continue current work (In Progress)
-        2. Start new ready work (Backlog with 🟢 Ready)
-        3. None available
+        2. Start new ready work (Backlog with 🟢 Ready label)
+        3. Start ANY work from Backlog (fallback - no label required)
+        4. None available
         """
         # Check for current work
         current = self.get_current_work()
         if current:
             return current
             
-        # Check for ready work
+        # Check for ready work (with 🟢 Ready label)
         ready = self.get_ready_work()
         if ready:
             return ready[0]
+        
+        # Fallback: ANY card in Backlog (no label required)
+        any_work = self.get_any_backlog_work()
+        if any_work:
+            return any_work[0]
             
         return None
         
