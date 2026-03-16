@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Session data (contains no credentials, but is runtime data)
+.living-sessions/
+
+# Logs
+*.log
+
+# Test artifacts
+test-output/
+.pytest_cache/
+
+# Local config (may contain sensitive data)
+config.local.yaml
+
+# Don't ignore: SKILL.md, README.md, etc.
+!*.md

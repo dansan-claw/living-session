@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""
+Living Session - CLI Interface
+
+Main entry point for the living-session command.
+"""
+
+import os
+import sys
+import argparse
+import yaml
+from pathlib import Path
+from typing import Dict, Any, Optional
+
+# Import our modules
+from session_state import SessionState
+from living_session import LivingSession
+from trello_client import TrelloClient
+from work_detector import LivingSessionWorkDetector, create_living_session_with_trello
+from scheduler import SelfScheduler
+
+
+def load_config(project_name: str) -> Optional[Dict[str, Any]]:
+    """Load configuration from ~/.openclaw/config.yaml"""
+    config_path = Path.home() / ".openclaw" / "config.yaml"
+    
+    if not config_path.exists():
+        return None
+        
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            
+        if config and 'living_sessions' in config:
+            return config['living_sessions'].get(project_name, {})
+            
+    except Exception as e:
+        print(f"⚠️  Error loading config: {e}")
+        
+    return None
+
+
+def get_trello_credentials(config: Dict[str, Any]) -> tuple:
+    """Get Trello credentials from config or environment."""
+    api_key = config.get('trello_api_key') or os.environ.get('TRELLO_API_KEY')
+    token = config.get('trello_token') or os.environ.get('TRELLO_TOKEN')
+    return api_key, token
+
+
+def cmd_start(project_name: str, config: Dict[str, Any]) -> int:
+    """Start a living session."""
+    print(f"\n🩸 Starting living session: {project_name}")
+    
+    # Check if already running
+    scheduler = SelfScheduler(project_name, config)
+    if scheduler.is_running():
+        print(f"⚠️  Session '{project_name}' is already running!")
+        print(f"   Use 'living-session status {project_name}' to check")
+        return 1
+        
+    # Get Trello credentials
+    api_key, token = get_trello_credentials(config)
+    if not api_key or not token:
+        print("❌ Trello credentials not found!")
+        print("   Set TRELLO_API_KEY and TRELLO_TOKEN environment variables")
+        return 1
+        
+    # Create and start session
+    try:
+        session = create_living_session_with_trello(project_name, config)
+        print(f"⏰ Interval: {config.get('interval', 3600)}s")
+        print(f"🛑 Press Ctrl+C to stop gracefully\n")
+        session.start()
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\n🛑 Interrupted by user")
+        return 0
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return 1
+
+
+def cmd_status(project_name: str, config: Dict[str, Any]) -> int:
+    """Check session status."""
+    print(f"\n📊 Living Session Status: {project_name}")
+    print("─" * 40)
+    
+    # Check scheduler status
+    scheduler = SelfScheduler(project_name, config)
+    sched_status = scheduler.get_status()
+    
+    # Check if running
+    if sched_status['is_running']:
+        print(f"🟢 Status: AWAKE")
+    else:
+        print(f"⚪ Status: ASLEEP")
+        
+    # Session info
+    state_mgr = SessionState(project_name)
+    if state_mgr.exists():
+        state = state_mgr.load()
+        if state:
+            print(f"📁 State: {state_mgr.get_state_path()}")
+            if state.get('current_card_name'):
+                print(f"📋 Current task: {state['current_card_name']}")
+            if state.get('last_action'):
+                print(f"⏰ Last action: {state['last_action']}")
+    
+    # Scheduler info
+    next_wake = sched_status.get('next_wake_in')
+    if next_wake is not None:
+        print(f"⏳ Next wake: in {next_wake}s")
+    else:
+        print(f"⏳ Next wake: Not scheduled")
+        
+    print(f"📈 Current interval: {sched_status['current_interval']}s")
+    print(f"🔄 Work cycles: {sched_status['work_count']}")
+    print(f"💤 No-work cycles: {sched_status['no_work_count']}")
+    
+    print("─" * 40)
+    return 0
+
+
+def cmd_stop(project_name: str, config: Dict[str, Any]) -> int:
+    """Stop a living session."""
+    print(f"\n🛑 Stopping living session: {project_name}")
+    
+    # Check if running
+    scheduler = SelfScheduler(project_name, config)
+    if not scheduler.is_running():
+        print(f"⚠️  Session '{project_name}' is not running")
+        return 0
+        
+    # Note: In a real implementation, we'd send a signal to the running process
+    # For now, we just update the state
+    state_mgr = SessionState(project_name)
+    state = state_mgr.load() or {}
+    state['status'] = 'stopped'
+    state['stopped_at'] = __import__('datetime').datetime.now().isoformat()
+    state_mgr.save(state)
+    
+    print(f"✅ Session stopped")
+    print(f"💾 State saved")
+    return 0
+
+
+def cmd_pause(project_name: str, config: Dict[str, Any]) -> int:
+    """Pause a living session."""
+    print(f"\n⏸️  Pausing living session: {project_name}")
+    
+    state_mgr = SessionState(project_name)
+    state = state_mgr.load() or {}
+    state['status'] = 'paused'
+    state['paused_at'] = __import__('datetime').datetime.now().isoformat()
+    state_mgr.save(state)
+    
+    print(f"✅ Session paused")
+    print(f"▶️  Resume with: living-session resume {project_name}")
+    return 0
+
+
+def cmd_resume(project_name: str, config: Dict[str, Any]) -> int:
+    """Resume a paused session."""
+    print(f"\n▶️  Resuming living session: {project_name}")
+    
+    state_mgr = SessionState(project_name)
+    state = state_mgr.load()
+    
+    if not state:
+        print(f"❌ No saved state found for '{project_name}'")
+        return 1
+        
+    if state.get('status') != 'paused':
+        print(f"⚠️  Session was not paused (status: {state.get('status')})")
+        print(f"   Starting fresh...")
+        
+    # Start the session
+    return cmd_start(project_name, config)
+
+
+def cmd_list() -> int:
+    """List all living sessions."""
+    print(f"\n📋 Living Sessions")
+    print("─" * 40)
+    
+    sessions_dir = Path.home() / ".openclaw" / "workspace" / ".living-sessions"
+    
+    if not sessions_dir.exists():
+        print("No sessions found")
+        return 0
+        
+    found = False
+    for project_dir in sessions_dir.iterdir():
+        if project_dir.is_dir():
+            found = True
+            project_name = project_dir.name
+            
+            # Check if running
+            scheduler = SelfScheduler(project_name, {})
+            status = "🟢" if scheduler.is_running() else "⚪"
+            
+            # Get last activity
+            state_file = project_dir / "state.json"
+            last_activity = "Never"
+            if state_file.exists():
+                try:
+                    import json
+                    with open(state_file) as f:
+                        state = json.load(f)
+                        if state.get('last_action'):
+                            last_activity = state['last_action'][:10]  # Just date
+                except:
+                    pass
+                    
+            print(f"{status} {project_name:<20} (last: {last_activity})")
+            
+    if not found:
+        print("No sessions found")
+        
+    print("─" * 40)
+    return 0
+
+
+def main() -> int:
+    """Main entry point."""
+    parser = argparse.ArgumentParser(
+        prog='living-session',
+        description='Living Session - Continuous consciousness for OpenClaw agents'
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    
+    # Start command
+    start_parser = subparsers.add_parser('start', help='Start a living session')
+    start_parser.add_argument('project', help='Project name')
+    start_parser.add_argument('--interval', type=int, help='Override interval (seconds)')
+    
+    # Status command
+    status_parser = subparsers.add_parser('status', help='Check session status')
+    status_parser.add_argument('project', help='Project name')
+    
+    # Stop command
+    stop_parser = subparsers.add_parser('stop', help='Stop a session')
+    stop_parser.add_argument('project', help='Project name')
+    
+    # Pause command
+    pause_parser = subparsers.add_parser('pause', help='Pause a session')
+    pause_parser.add_argument('project', help='Project name')
+    
+    # Resume command
+    resume_parser = subparsers.add_parser('resume', help='Resume a paused session')
+    resume_parser.add_argument('project', help='Project name')
+    
+    # List command
+    list_parser = subparsers.add_parser('list', help='List all sessions')
+    
+    # Parse args
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        return 1
+        
+    # Load config for project commands
+    config = None
+    if hasattr(args, 'project'):
+        config = load_config(args.project)
+        if config is None:
+            # Use defaults
+            config = {
+                'interval': 3600,
+                'max_interval': 14400,
+                'trello_board': None
+            }
+            
+        # Override with CLI args
+        if hasattr(args, 'interval') and args.interval:
+            config['interval'] = args.interval
+    
+    # Dispatch command
+    commands = {
+        'start': cmd_start,
+        'status': cmd_status,
+        'stop': cmd_stop,
+        'pause': cmd_pause,
+        'resume': cmd_resume,
+        'list': cmd_list
+    }
+    
+    handler = commands.get(args.command)
+    if handler:
+        if args.command == 'list':
+            return handler()
+        else:
+            return handler(args.project, config)
+    else:
+        parser.print_help()
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
